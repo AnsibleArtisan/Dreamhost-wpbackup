@@ -1,0 +1,114 @@
+---
+# Playbook for doing backup (Wordpress home and database) on a WP installation on Dreamhost
+# and download to the controller
+#
+- hosts: webservers
+  gather_facts: true
+  vars:
+    # Default from Dreamhost is the same name of the site for WP directory
+    wp_basedir: "{{ inventory_hostname }}"
+    wp_backupdir: ansible_{{ inventory_hostname }}_backups
+    wp_dir_backupfile: "{{ wp_backupdir }}/dir-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
+    wp_db_backupfile: "{{ wp_backupdir }}/db-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.gz"
+
+  tasks:
+
+    - name: Parse the wp-config file for some parameters
+      block:
+        - name: Read the whole config file {{ wp_basedir }}/wp-config.php into memory
+          ansible.builtin.slurp:
+            src: "{{ wp_basedir }}/wp-config.php"
+          register: _config_file
+
+        - name: Parse WP variables from the actual config file at {{ wp_basedir }}/wp_config.php
+          ansible.builtin.set_fact:
+            wp_DB_NAME: >-
+              {{ _config_file.content | b64decode | regex_search("^ *define\('DB_NAME',\s+'(\w+)'\)", '\1', multiline=True) | first }}
+            wp_DB_USER: >-
+              {{ _config_file.content | b64decode | regex_search("^ *define\('DB_USER',\s+'(\w+)'\)", '\1', multiline=True) | first }}
+            wp_DB_PASSWORD: >-
+              {{ _config_file.content | b64decode | regex_search("^ *define\('DB_PASSWORD',\s+'([-\w$%&]+)'\)", '\1', multiline=True) | first }}
+            wp_DB_HOST: >-
+              {{ _config_file.content | b64decode | regex_search("^ *define\('DB_HOST',\s+'([.\d\w]+)'\)", '\1', multiline=True) | first }}
+
+    - name: Create the backup directory in the WP host
+      ansible.builtin.file:
+        path: "{{ wp_backupdir }}"
+        mode: "u+rwX,g+rwX"
+        state: directory
+
+    - name: Critical section for putting the site in maintenance mode
+      block:
+      - name: Trigger maintenance mode on WP home (.maintenance file)
+        ansible.builtin.copy:
+          dest: "{{ wp_basedir }}/.maintenance"
+          mode: "u+rwX,g+rwX"
+          content: |
+            <?php $upgrading = time(); ?>
+
+      - name: Run a backup for the WP directory into {{ wp_backupdir }}
+        # Using shell because we had to make it async so it wouldn't hang
+        # on Dreamhost servers
+        ansible.builtin.shell:
+          cmd: >-
+            tar cfz {{ wp_dir_backupfile }} {{ inventory_hostname }}
+        register: dir_backup_job
+        changed_when: true
+        # Leave running in the background for up to 30 minutes
+        async: 1800
+        poll: 0
+
+      - name: Run a backup for the WP database
+        ansible.builtin.shell:
+          cmd: >-
+            mysqldump --no-tablespaces -u{{ wp_DB_USER }} -p{{ wp_DB_PASSWORD }}
+            -h {{ wp_DB_HOST }} {{ wp_DB_NAME }} | gzip > {{ wp_db_backupfile }}
+        register: db_backup_job
+        changed_when: true
+        # Leave running in the background for up to 30 minutes, database backup
+        # usually takes much less than that
+        async: 1800
+        poll: 0
+
+      - name: Check back on WP DB backup
+        ansible.builtin.async_status:
+          jid: "{{ db_backup_job.ansible_job_id }}"
+        register: job_result
+        until: job_result.finished
+        retries: 180
+        delay: 10
+
+      - name: Check back on WP directory backup
+        ansible.builtin.async_status:
+          jid: "{{ dir_backup_job.ansible_job_id }}"
+        register: job_result
+        until: job_result.finished
+        retries: 180
+        delay: 10
+      # No matter what happened, site should be made available again before playbook ends
+      always:
+      - name: Remove maintenance mode on WP home (.maintenance file)
+        ansible.builtin.file:
+          path: "{{ wp_basedir }}/.maintenance"
+          state: absent
+
+    - name: Create  a local backup directory in the control node
+      ansible.builtin.file:
+        path: "{{ wp_backupdir }}"
+        mode: "u+rwX,g+rwX"
+        state: directory
+      delegate_to: localhost
+
+    - name: Transfer WP backups to the controller
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ wp_backupdir }}/"
+        flat: true
+      loop:
+        - "{{ wp_dir_backupfile }}"
+        - "{{ wp_db_backupfile }}"
+
+
+    # - name: Transfer DB backup to the controller
+    # - name: Upload both backups to object storage
+    # -

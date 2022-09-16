@@ -1,0 +1,3 @@
+ansible*_backups/**
+ansible.cfg
+inventory
