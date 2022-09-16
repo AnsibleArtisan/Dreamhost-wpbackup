@@ -2,7 +2,7 @@
 # Playbook for doing backup (Wordpress home and database) on a WP installation on Dreamhost
 # and download to the controller
 #
-- hosts: webservers
+- hosts: websites
   gather_facts: true
   vars:
     # Default from Dreamhost is the same name of the site for WP directory
@@ -13,7 +13,7 @@
 
   tasks:
 
-    - name: Parse the wp-config file for some parameters
+    - name: Parse the wp-config file for WP parameters
       block:
         - name: Read the whole config file {{ wp_basedir }}/wp-config.php into memory
           ansible.builtin.slurp:
@@ -107,8 +107,3 @@
       loop:
         - "{{ wp_dir_backupfile }}"
         - "{{ wp_db_backupfile }}"
-
-
-    # - name: Transfer DB backup to the controller
-    # - name: Upload both backups to object storage
-    # -
