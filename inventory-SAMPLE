@@ -1,6 +1,6 @@
 [websites]
 # No matter if they live in the same actual server, use a website name
 # as each element in the inventory
-mywebsite
+mywebsite ansible_user=mywebsite_shell_user
 mysecondwebsite
 
