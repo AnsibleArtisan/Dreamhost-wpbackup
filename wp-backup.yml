@@ -39,58 +39,57 @@
 
     - name: Critical section for putting the site in maintenance mode
       block:
-      - name: Trigger maintenance mode on WP home (.maintenance file)
-        ansible.builtin.copy:
-          dest: "{{ wp_basedir }}/.maintenance"
-          mode: "u+rwX,g+rwX"
-          content: |
-            <?php $upgrading = time(); ?>
+        - name: Trigger maintenance mode on WP home (.maintenance file)
+          ansible.builtin.copy:
+            dest: "{{ wp_basedir }}/.maintenance"
+            mode: "u+rwX,g+rwX"
+            content: |
+              <?php $upgrading = time(); ?>
 
-      - name: Run a backup for the WP directory into {{ wp_backupdir }}
-        # Using shell because we had to make it async so it wouldn't hang
-        # on Dreamhost servers
-        ansible.builtin.shell:
-          cmd: >-
-            tar cfz {{ wp_dir_backupfile }} {{ inventory_hostname }}
-        register: dir_backup_job
-        changed_when: true
-        # Leave running in the background for up to 30 minutes
-        async: 1800
-        poll: 0
+        - name: Run a backup for the WP directory into {{ wp_backupdir }}
+          # Using shell because we had to make it async so it wouldn't hang
+          # on Dreamhost servers
+          ansible.builtin.command:
+            cmd: tar cfz {{ wp_dir_backupfile }} {{ inventory_hostname }}
+          register: dir_backup_job
+          changed_when: true
+          # Leave running in the background for up to 30 minutes
+          async: 1800
+          poll: 0
 
-      - name: Run a backup for the WP database
-        ansible.builtin.shell:
-          cmd: >-
-            mysqldump --no-tablespaces -u{{ wp_DB_USER }} -p{{ wp_DB_PASSWORD }}
-            -h {{ wp_DB_HOST }} {{ wp_DB_NAME }} | gzip > {{ wp_db_backupfile }}
-        register: db_backup_job
-        changed_when: true
-        # Leave running in the background for up to 30 minutes, database backup
-        # usually takes much less than that
-        async: 1800
-        poll: 0
+        - name: Run a backup for the WP database
+          ansible.builtin.shell:
+            cmd: >-
+              mysqldump --no-tablespaces -u{{ wp_DB_USER }} -p{{ wp_DB_PASSWORD }}
+              -h {{ wp_DB_HOST }} {{ wp_DB_NAME }} | gzip > {{ wp_db_backupfile }}
+          register: db_backup_job
+          changed_when: true
+          # Leave running in the background for up to 30 minutes, database backup
+          # usually takes much less than that
+          async: 1800
+          poll: 0
 
-      - name: Check back on WP DB backup
-        ansible.builtin.async_status:
-          jid: "{{ db_backup_job.ansible_job_id }}"
-        register: job_result
-        until: job_result.finished
-        retries: 180
-        delay: 10
+        - name: Check back on WP DB backup
+          ansible.builtin.async_status:
+            jid: "{{ db_backup_job.ansible_job_id }}"
+          register: job_result
+          until: job_result.finished
+          retries: 180
+          delay: 10
 
-      - name: Check back on WP directory backup
-        ansible.builtin.async_status:
-          jid: "{{ dir_backup_job.ansible_job_id }}"
-        register: job_result
-        until: job_result.finished
-        retries: 180
-        delay: 10
+        - name: Check back on WP directory backup
+          ansible.builtin.async_status:
+            jid: "{{ dir_backup_job.ansible_job_id }}"
+          register: job_result
+          until: job_result.finished
+          retries: 180
+          delay: 10
       # No matter what happened, site should be made available again before playbook ends
       always:
-      - name: Remove maintenance mode on WP home (.maintenance file)
-        ansible.builtin.file:
-          path: "{{ wp_basedir }}/.maintenance"
-          state: absent
+        - name: Remove maintenance mode on WP home (.maintenance file)
+          ansible.builtin.file:
+            path: "{{ wp_basedir }}/.maintenance"
+            state: absent
 
     - name: Create  a local backup directory in the control node
       ansible.builtin.file:
